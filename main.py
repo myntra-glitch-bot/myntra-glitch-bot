@@ -5,13 +5,8 @@ from bs4 import BeautifulSoup
 import re
 from flask import Flask
 import os
-
-# Flask app to keep service alive
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "✅ Myntra Glitch Bot is Live & Working!"
+import threading
+from datetime import datetime
 
 # Load config
 with open("config.json") as f:
@@ -20,7 +15,21 @@ with open("config.json") as f:
 telegram_token = config["telegram_token"]
 telegram_user_id = config["telegram_user_id"]
 
-# Categories loop (auto switch)
+# Flask App to keep Render alive
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "✅ Myntra Glitch Bot is Live & Working!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
+
+# Start Flask in background
+threading.Thread(target=run_flask).start()
+
+# Category URLs to scan
 category_urls = [
     "https://www.myntra.com/men-clothing",
     "https://www.myntra.com/women-clothing",
@@ -30,14 +39,11 @@ category_urls = [
     "https://www.myntra.com/home-living"
 ]
 
-sent_items = set()
-print("✅ Bot started!")
-
 # Premium brands list
 premium_brands = [
     "zara", "nike", "puma", "mango", "armani", "tommy", "ck", "guess", "h&m",
     "rare rabbit", "diesel", "jack & jones", "pepe", "lee", "louis vuitton",
-    "versace", "allsaints", "reebok", "superdry", "uspa", "lino", "linen", 
+    "versace", "allsaints", "reebok", "superdry", "uspa", "lino", "linen",
     "roadster", "campus", "redtape", "levis", "adidas", "bata", "skechers"
 ]
 
@@ -47,6 +53,12 @@ special_keywords = [
     "running shoes", "sneakers", "blazer", "luxury", "linen shirt", "linen pant"
 ]
 
+sent_items = set()
+print("✅ Bot started!")
+
+# Daily ping tracker
+last_ping_date = None
+
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
     data = {"chat_id": telegram_user_id, "text": message}
@@ -55,8 +67,15 @@ def send_telegram(message):
     except Exception as e:
         print("Telegram Error:", e)
 
-def scan_myntra():
+while True:
     try:
+        current_date = datetime.now().date()
+
+        # ✅ Daily ping once per day
+        if last_ping_date != current_date:
+            send_telegram("📢 Daily Ping: Myntra Glitch Bot is LIVE & Running!")
+            last_ping_date = current_date
+
         for url in category_urls:
             headers = {"User-Agent": "Mozilla/5.0"}
             res = requests.get(url, headers=headers)
@@ -88,12 +107,8 @@ def scan_myntra():
 
             print(f"✅ Scanned: {url}")
 
+        time.sleep(30)
+
     except Exception as e:
         print("⚠️ Error:", e)
-
-if __name__ == "__main__":
-    from threading import Thread
-    Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))).start()
-    while True:
-        scan_myntra()
-        time.sleep(30)
+        time.sleep(60)

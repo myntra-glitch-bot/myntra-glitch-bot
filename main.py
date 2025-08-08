@@ -3,33 +3,19 @@ import json
 import requests
 from bs4 import BeautifulSoup
 import re
-from flask import Flask
-import os
-import threading
 from datetime import datetime
+import random
 
-# Load config
+# Config load
 with open("config.json") as f:
     config = json.load(f)
 
 telegram_token = config["telegram_token"]
 telegram_user_id = config["telegram_user_id"]
 
-# Flask App to keep Railway + BetterUptime alive
-app = Flask(__name__)
+# Render app ka URL yaha daal
+RENDER_URL = "https://your-render-app.onrender.com"
 
-@app.route('/')
-def home():
-    return "✅ Myntra Glitch Bot is Live & Working!"
-
-def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
-
-# Start Flask server in background
-threading.Thread(target=run_flask).start()
-
-# ✅ Category URLs to scan
 category_urls = [
     "https://www.myntra.com/men-clothing",
     "https://www.myntra.com/women-clothing",
@@ -39,7 +25,6 @@ category_urls = [
     "https://www.myntra.com/home-living"
 ]
 
-# ✅ Premium Brands List
 premium_brands = [
     "zara", "nike", "puma", "mango", "armani", "tommy", "ck", "guess", "h&m",
     "rare rabbit", "diesel", "jack & jones", "pepe", "lee", "louis vuitton",
@@ -47,7 +32,6 @@ premium_brands = [
     "roadster", "campus", "redtape", "levis", "adidas", "bata", "skechers"
 ]
 
-# ✅ Special keywords
 special_keywords = [
     "coupon", "extra off", "watch", "wristwatch", "smartwatch", "leather shoes",
     "running shoes", "sneakers", "blazer", "luxury", "linen shirt", "linen pant"
@@ -58,26 +42,43 @@ last_ping_date = None
 
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
-    data = {"chat_id": telegram_user_id, "text": message}
     try:
-        requests.post(url, data=data)
+        requests.post(url, data={"chat_id": telegram_user_id, "text": message}, timeout=10)
     except Exception as e:
         print("Telegram Error:", e)
 
-print("✅ Bot started and Flask is running!")
+def ping_render():
+    """Render ko ping karne ka function"""
+    try:
+        res = requests.get(RENDER_URL, timeout=10)
+        if res.status_code == 200:
+            print(f"[OK] Render ping successful ({time.ctime()})")
+        else:
+            print(f"[FAIL] Render ping status: {res.status_code}")
+    except Exception as e:
+        print("[PING ERROR]", e)
+
+print("✅ Bot started on phone!")
 
 while True:
     try:
-        current_date = datetime.now().date()
+        # Render ko ping karo taaki wo active rahe
+        ping_render()
 
-        # ✅ Daily ping
+        current_date = datetime.now().date()
         if last_ping_date != current_date:
             send_telegram("📢 Daily Ping: Myntra Glitch Bot is LIVE & Running!")
             last_ping_date = current_date
 
         for url in category_urls:
             headers = {"User-Agent": "Mozilla/5.0"}
-            res = requests.get(url, headers=headers)
+            try:
+                res = requests.get(url, headers=headers, timeout=10)
+                res.raise_for_status()
+            except Exception as e:
+                print(f"⚠️ Request Error for {url}: {e}")
+                continue
+
             soup = BeautifulSoup(res.text, "html.parser")
             products = soup.find_all("li")
 
@@ -106,8 +107,8 @@ while True:
 
             print(f"✅ Scanned: {url}")
 
-        time.sleep(30)
+        time.sleep(random.randint(30, 60))  # Random delay
 
     except Exception as e:
-        print("⚠️ Error:", e)
+        print("⚠️ Main Loop Error:", e)
         time.sleep(60)

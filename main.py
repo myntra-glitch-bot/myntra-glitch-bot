@@ -164,6 +164,14 @@ def fetch_coupon_html(product_url):
         return False, ""
     except: return False, ""
 
+# ---- NEW FUNCTION ADDED ----
+def extract_coupon(text):
+    if not text:
+        return 0
+    match = re.search(r"₹\s?(\d+)", text.replace(",", ""))
+    return int(match.group(1)) if match else 0
+# ----------------------------
+
 def scan_category(url):
     try:
         r = requests.get(url, headers=HEADERS, timeout=15)

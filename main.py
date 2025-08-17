@@ -1,114 +1,98 @@
-import time
-import json
+import os
 import requests
+import time
 from bs4 import BeautifulSoup
-import re
+from flask import Flask
 from datetime import datetime
-import random
 
-# Config load
-with open("config.json") as f:
-    config = json.load(f)
+# Flask app for Render health check
+app = Flask(__name__)
 
-telegram_token = config["telegram_token"]
-telegram_user_id = config["telegram_user_id"]
+@app.route('/')
+def home():
+    return "✅ Myntra Glitch Bot is Running!"
 
-# Render app ka URL yaha daal
-RENDER_URL = "https://your-render-app.onrender.com"
+@app.route('/health')
+def health():
+    return {"status": "healthy", "time": datetime.now().isoformat()}
 
-category_urls = [
-    "https://www.myntra.com/men-clothing",
-    "https://www.myntra.com/women-clothing",
-    "https://www.myntra.com/men-shoes",
-    "https://www.myntra.com/women-footwear",
-    "https://www.myntra.com/watches",
-    "https://www.myntra.com/home-living"
-]
+# Telegram config
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
-premium_brands = [
-    "zara", "nike", "puma", "mango", "armani", "tommy", "ck", "guess", "h&m",
-    "rare rabbit", "diesel", "jack & jones", "pepe", "lee", "louis vuitton",
-    "versace", "allsaints", "reebok", "superdry", "uspa", "lino", "linen",
-    "roadster", "campus", "redtape", "levis", "adidas", "bata", "skechers"
-]
+# Target premium brands
+premium_brands = ["Nike", "Jordan", "Adidas", "Zara", "H&M", "Puma", "Armani Exchange", "Guess", "Calvin Klein"]
 
-special_keywords = [
-    "coupon", "extra off", "watch", "wristwatch", "smartwatch", "leather shoes",
-    "running shoes", "sneakers", "blazer", "luxury", "linen shirt", "linen pant"
-]
+# Already sent deals (de-duplication)
+sent_deals = set()
 
-sent_items = set()
-last_ping_date = None
-
-def send_telegram(message):
-    url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
+def send_telegram_message(message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": CHAT_ID, "text": message}
     try:
-        requests.post(url, data={"chat_id": telegram_user_id, "text": message}, timeout=10)
+        requests.post(url, json=payload)
     except Exception as e:
-        print("Telegram Error:", e)
+        print("⚠️ Telegram Error:", e)
 
-def ping_render():
-    """Render ko ping karne ka function"""
-    try:
-        res = requests.get(RENDER_URL, timeout=10)
-        if res.status_code == 200:
-            print(f"[OK] Render ping successful ({time.ctime()})")
-        else:
-            print(f"[FAIL] Render ping status: {res.status_code}")
-    except Exception as e:
-        print("[PING ERROR]", e)
+def check_myntra_glitches():
+    url = "https://www.myntra.com/men-tshirts"  # Example category
+    headers = {"User-Agent": "Mozilla/5.0"}
+    r = requests.get(url, headers=headers)
+    if r.status_code != 200:
+        print("❌ Error fetching Myntra page:", r.status_code)
+        return
+    
+    soup = BeautifulSoup(r.text, "html.parser")
+    products = soup.find_all("li", {"class": "product-base"})
 
-print("✅ Bot started on phone!")
+    for p in products:
+        try:
+            name = p.find("h3", {"class": "product-brand"}).text.strip()
+            title = p.find("h4", {"class": "product-product"}).text.strip()
+            price = int(p.find("span", {"class": "product-discountedPrice"}).text.replace("Rs. ", "").replace(",", ""))
+            orig_price = int(p.find("span", {"class": "product-strike"}).text.replace("Rs. ", "").replace(",", ""))
+            discount = int((orig_price - price) * 100 / orig_price)
 
-while True:
-    try:
-        # Render ko ping karo taaki wo active rahe
-        ping_render()
+            # Generate unique deal ID
+            deal_id = f"{name}-{title}-{price}"
 
-        current_date = datetime.now().date()
-        if last_ping_date != current_date:
-            send_telegram("📢 Daily Ping: Myntra Glitch Bot is LIVE & Running!")
-            last_ping_date = current_date
-
-        for url in category_urls:
-            headers = {"User-Agent": "Mozilla/5.0"}
-            try:
-                res = requests.get(url, headers=headers, timeout=10)
-                res.raise_for_status()
-            except Exception as e:
-                print(f"⚠️ Request Error for {url}: {e}")
+            # Skip duplicates
+            if deal_id in sent_deals:
                 continue
+            sent_deals.add(deal_id)
 
-            soup = BeautifulSoup(res.text, "html.parser")
-            products = soup.find_all("li")
+            # Conditions
+            if (name in ["Nike", "Jordan"] and discount >= 40) or \
+               (discount >= 80) or \
+               (name in premium_brands and (orig_price - price) >= 1000):
 
-            for product in products:
-                text = product.text.strip().lower()
-                if not text or text in sent_items:
-                    continue
+                message = f"🔥 Deal Found!\n\n🛍 {name} - {title}\n💰 Price: Rs.{price}\n🏷 Discount: {discount}% OFF\n🔗 https://www.myntra.com/{title.replace(' ', '-')}"
+                send_telegram_message(message)
+                print("✅ Alert sent:", message)
 
-                price_match = re.search(r"₹(\d{2,5})", text)
-                mrp_match = re.findall(r"mrp.*?₹(\d{2,5})", text)
-                price = int(price_match.group(1)) if price_match else None
-                mrp = int(mrp_match[0]) if mrp_match else None
+        except Exception as e:
+            print("⚠️ Error parsing product:", e)
 
-                discount_amt = (mrp - price) if (price and mrp and mrp > price) else 0
-                discount_per = round((discount_amt / mrp) * 100) if (price and mrp) else 0
+def daily_status_message():
+    send_telegram_message("✅ Bot is alive & running fine on Render 🚀")
 
-                is_glitch = discount_per >= 80 or discount_amt >= 1000
-                is_coupon = any(word in text for word in special_keywords)
-                is_premium = any(brand in text for brand in premium_brands)
+# Scheduler loop
+def start_bot():
+    last_status_time = 0
+    while True:
+        try:
+            check_myntra_glitches()
+        except Exception as e:
+            print("⚠️ Error in bot loop:", e)
 
-                if is_glitch or (is_premium and (discount_per >= 50 or discount_amt >= 500)) or is_coupon:
-                    sent_items.add(text)
-                    link = url.split("?")[0]
-                    message = f"🧨 Loot Alert 🛍️\n\n{text[:300]}\n\n🔗 {link}"
-                    send_telegram(message)
+        # Send status once every 24h
+        if time.time() - last_status_time > 86400:
+            daily_status_message()
+            last_status_time = time.time()
 
-            print(f"✅ Scanned: {url}")
+        time.sleep(60)  # run every 1 min
 
-        time.sleep(random.randint(30, 60))  # Random delay
-
-    except Exception as e:
-        print("⚠️ Main Loop Error:", e)
-        time.sleep(60)
+if __name__ == "__main__":
+    import threading
+    threading.Thread(target=start_bot).start()
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))

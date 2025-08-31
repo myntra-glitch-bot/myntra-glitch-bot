@@ -1,136 +1,122 @@
+import os
+import json
+import time
+import threading
 import requests
 from bs4 import BeautifulSoup
-import time
-import json
-import os
+from flask import Flask
 
-# Load config.json (Telegram Bot Token + User ID)
-with open("config.json") as f:
+# ------------------- Load Config -------------------
+with open("config.json", "r") as f:
     config = json.load(f)
 
-BOT_TOKEN = config["BOT_TOKEN"]
-USER_ID = config["USER_ID"]
+BOT_TOKEN = os.getenv("BOT_TOKEN", config.get("BOT_TOKEN"))
+CHAT_ID = os.getenv("CHAT_ID", config.get("CHAT_ID"))
+SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL", config.get("SCAN_INTERVAL", 60)))
 
-# Priority 5 brands (Rule 1)
-priority_brands = ["nike", "jordan", "h&m", "mango man", "zara"]
+# ------------------- Brand Rules -------------------
+priority_brands = [
+    "Nike", "Adidas", "Puma", "H&M", "Zara"
+]
 
-# Premium 28 brands (Rule 2)
 premium_brands = [
-    "adidas", "puma", "only", "armani exchange", "guess", "rare rabbit",
-    "tommy hilfiger", "ck", "diesel", "allsaints", "versace",
-    "jack & jones", "pepe jeans", "lee", "louis vuitton", "flying machine",
-    "wrogn", "pure cotton", "gant", "banana club", "snitch",
-    "mr bowerbird", "gap", "new balance", "asics", "bear house", "next", "either"
+    "Armani Exchange", "Guess", "Louis Vuitton", "Mango Man", "Rare Rabbit",
+    "Tommy Hilfiger", "Calvin Klein", "Diesel", "AllSaints", "Versace",
+    "Jack & Jones", "Pepe Jeans", "Lee", "Linen Club"
 ]
 
-# Special categories (Rule 3)
-special_categories = [
-    "https://www.myntra.com/men-clothing",
-    "https://www.myntra.com/women-clothing",
-    "https://www.myntra.com/men-footwear",
-    "https://www.myntra.com/women-footwear",
-    "https://www.myntra.com/men-watches",
-    "https://www.myntra.com/women-watches"
-]
+special_categories = ["shoes", "watches", "luxury", "pure linen"]
 
-# Price history file
-PRICE_HISTORY_FILE = "price_history.json"
-
-# Load or initialize price history
-if os.path.exists(PRICE_HISTORY_FILE):
-    with open(PRICE_HISTORY_FILE, "r") as f:
-        price_history = json.load(f)
-else:
-    price_history = {}
-
-# Save price history
-def save_price_history():
-    with open(PRICE_HISTORY_FILE, "w") as f:
-        json.dump(price_history, f)
-
-# Send Telegram Alert
-def send_alert(message):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    data = {"chat_id": USER_ID, "text": message, "parse_mode": "HTML"}
+# ------------------- Telegram Alert -------------------
+def send_telegram(message: str):
     try:
-        requests.post(url, data=data)
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"}
+        requests.post(url, data=payload, timeout=10)
     except Exception as e:
-        print("Error sending alert:", e)
+        print(f"Telegram error: {e}")
 
-# Scraper Function
-def scrape_page(url):
-    headers = {"User-Agent": "Mozilla/5.0"}
-    response = requests.get(url, headers=headers)
-    if response.status_code != 200:
-        print(f"Error {response.status_code} while fetching {url}")
-        return []
-
-    soup = BeautifulSoup(response.text, "html.parser")
-    return soup.find_all("li", {"class": "product-base"})
-
-# Apply rules
-def process_product(product, category_url):
-    global price_history
+# ------------------- Scraper Logic -------------------
+def check_myntra_glitches():
+    print("🔍 Scanning Myntra for glitches...")
     try:
-        brand = product.find("h3", {"class": "product-brand"}).text.strip().lower()
-        title = product.find("h4", {"class": "product-product"}).text.strip()
-
-        price = product.find("span", {"class": "product-discountedPrice"})
-        original_price = product.find("span", {"class": "product-strike"})
-        discount = product.find("span", {"class": "product-discountPercentage"})
-
-        if not (price and original_price and discount):
+        url = "https://www.myntra.com/men-tshirts"  # Example category
+        r = requests.get(url, timeout=15)
+        if r.status_code != 200:
+            print("Failed to fetch Myntra page")
             return
 
-        price = int(price.text.replace("Rs.", "").replace(",", "").strip())
-        original_price = int(original_price.text.replace("Rs.", "").replace(",", "").strip())
-        discount_value = int(discount.text.replace("(", "").replace("% OFF)", "").strip())
+        soup = BeautifulSoup(r.text, "html.parser")
+        products = soup.find_all("li", {"class": "product-base"})
 
-        product_url = "https://www.myntra.com/" + product.find("a")["href"]
+        for product in products:
+            try:
+                brand = product.find("h3", {"class": "product-brand"}).get_text(strip=True)
+                name = product.find("h4", {"class": "product-product"}).get_text(strip=True)
+                price = product.find("span", {"class": "product-discountedPrice"})
+                orig_price = product.find("span", {"class": "product-strike"})
+                discount = product.find("span", {"class": "product-discountPercentage"})
+                link = "https://www.myntra.com/" + product.find("a", href=True)["href"]
 
-        # ---------------- PRICE DROP DETECTOR ----------------
-        last_price = price_history.get(product_url, None)
-        if last_price and last_price - price >= 500:
-            send_alert(f"📉 Sudden Price Drop!\n\n<b>{brand.title()} - {title}</b>\nDropped: Rs.{last_price - price}\nNew Price: Rs.{price}\nOld Price: Rs.{last_price}\n👉 {product_url}")
+                if not price:
+                    continue
 
-        # Update price history
-        price_history[product_url] = price
-        save_price_history()
+                price = int(price.get_text().replace("₹", "").replace(",", ""))
+                orig_price = int(orig_price.get_text().replace("₹", "").replace(",", "")) if orig_price else price
+                discount_percent = int(discount.get_text().replace("% OFF", "")) if discount else 0
 
-        # ---------------- APPLY RULES ----------------
+                # -------- Glitch / Rule Detection --------
+                is_glitch = False
+                reason = ""
 
-        # Rule 1: Priority brands (≥30% or coupon or glitch)
-        if any(b in brand for b in priority_brands):
-            if discount_value >= 30:
-                send_alert(f"🔥 Priority Brand Loot!\n\n<b>{brand.title()} - {title}</b>\nDiscount: {discount_value}%\nPrice: Rs.{price}\nOriginal: Rs.{original_price}\n👉 {product_url}")
+                if brand in priority_brands and discount_percent >= 60:
+                    is_glitch = True
+                    reason = "🔥 Priority Brand 60%+"
+                elif brand in premium_brands and discount_percent >= 70:
+                    is_glitch = True
+                    reason = "💎 Premium Brand 70%+"
+                elif discount_percent >= 80:
+                    is_glitch = True
+                    reason = "⚡ 80%+ Discount"
+                elif price <= 199 and discount_percent >= 70:
+                    is_glitch = True
+                    reason = "💥 ₹199 Super Loot"
+                elif any(cat in name.lower() for cat in special_categories) and discount_percent >= 60:
+                    is_glitch = True
+                    reason = "⭐ Special Category Loot"
 
-        # Rule 2: Premium brands (≥60% or coupon or glitch)
-        elif any(b in brand for b in premium_brands):
-            if discount_value >= 60:
-                send_alert(f"💎 Premium Brand Loot!\n\n<b>{brand.title()} - {title}</b>\nDiscount: {discount_value}%\nPrice: Rs.{price}\nOriginal: Rs.{original_price}\n👉 {product_url}")
+                # -------- Alert --------
+                if is_glitch:
+                    message = (
+                        f"{reason}\n"
+                        f"<b>{brand}</b> - {name}\n"
+                        f"Price: ₹{price}  (MRP: ₹{orig_price}, {discount_percent}% OFF)\n"
+                        f"<a href='{link}'>Grab Now 🔗</a>"
+                    )
+                    print("ALERT:", message)
+                    send_telegram(message)
 
-        # Rule 3: Other brands but only in special categories (80–90% discount)
-        elif category_url in special_categories and 80 <= discount_value <= 90:
-            send_alert(f"⚡ Special Category Loot!\n\n<b>{brand.title()} - {title}</b>\nDiscount: {discount_value}%\nPrice: Rs.{price}\nOriginal: Rs.{original_price}\n👉 {product_url}")
-
-        # Rule 4: Apply coupon detection
-        coupon = product.find("span", string=lambda x: x and "coupon" in x.lower())
-        if coupon:
-            send_alert(f"🎟 Coupon Found!\n\n<b>{brand.title()} - {title}</b>\nDiscount: {discount_value}% + Extra Coupon\nPrice: Rs.{price}\nOriginal: Rs.{original_price}\n👉 {product_url}")
+            except Exception as e:
+                print("Parse error:", e)
 
     except Exception as e:
-        return
+        print("Scraper error:", e)
 
-# Main Loop
-def main():
-    urls = special_categories + ["https://www.myntra.com/men", "https://www.myntra.com/women"]
+# ------------------- Background Loop -------------------
+def background_task():
     while True:
-        for url in urls:
-            print(f"Checking {url}...")
-            products = scrape_page(url)
-            for product in products:
-                process_product(product, url)
-        time.sleep(60)  # Run every 1 min
+        check_myntra_glitches()
+        time.sleep(SCAN_INTERVAL)
 
+# ------------------- Flask App -------------------
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "✅ Myntra Glitch Bot Running with Flask + Thread"
+
+# ------------------- Start Bot -------------------
 if __name__ == "__main__":
-    main()
+    t = threading.Thread(target=background_task, daemon=True)
+    t.start()
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

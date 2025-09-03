@@ -3,4 +3,3 @@ requests
 beautifulsoup4
 lxml
 gunicorn
-python-telegram-bot==13.15
